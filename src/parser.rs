@@ -1028,16 +1028,17 @@ impl<'a> Parser<'a> {
         let (maybe_c, remaining) = input.split_first();
         // If url is special, then:
         if scheme_type.is_special() {
-            // If c is U+005C (\), validation error.
-            if maybe_c == Some('\\') {
-                self.log_violation(SyntaxViolation::Backslash);
+            if let Some(c) = maybe_c {
+                if c == '\\' {
+                    // If c is U+005C (\), validation error.
+                    self.log_violation(SyntaxViolation::Backslash);
+                }
+                // Set state to path state.
+                return self.parse_path(scheme_type, has_host, path_start, input);
+            } else {
+                // A special URL always has a non-empty path.
+                self.serialization.push('/');
             }
-            // If c is neither U+002F (/) nor U+005C (\), then decrease pointer by one.
-            if maybe_c == Some('/') || maybe_c == Some('\\') {
-                input = remaining;
-            }
-            // Set state to path state.
-            return self.parse_path(scheme_type, has_host, path_start, input);
         } else if maybe_c == Some('?') {
             // Otherwise, if state override is not given and c is U+003F (?),
             // set url’s query to the empty string and state to query state.
@@ -1049,12 +1050,7 @@ impl<'a> Parser<'a> {
         }
         // Otherwise, if c is not the EOF code point:
         if !remaining.is_empty() {
-            if maybe_c == Some('/') {
-                return self.parse_path(scheme_type, has_host, path_start, input);
-            } else {
-                // If c is not U+002F (/), then decrease pointer by one.
-                return self.parse_path(scheme_type, has_host, path_start, remaining);
-            }
+            return self.parse_path(scheme_type, has_host, path_start, input);
         }
         input
     }
@@ -1127,9 +1123,6 @@ impl<'a> Parser<'a> {
         path_start: usize,
         mut input: Input<'i>,
     ) -> Input<'i> {
-        if !self.serialization.ends_with('/') && scheme_type.is_special() && !input.is_empty() {
-            self.serialization.push('/');
-        }
         // Relative path state
         loop {
             let segment_start = self.serialization.len();
@@ -1151,7 +1144,7 @@ impl<'a> Parser<'a> {
                         && scheme_type.is_special() =>
                     {
                         self.log_violation(SyntaxViolation::Backslash);
-                        self.serialization.push(c);
+                        self.serialization.push('/');
                         ends_with_slash = true;
                         break;
                     }
@@ -1175,18 +1168,26 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+
             match &self.serialization[segment_start..] {
+                // If buffer is a double-dot path segment, shorten url’s path,
+                // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
                 | ".%2E" => {
                     debug_assert!(self.serialization.as_bytes()[segment_start - 1] == b'/');
                     self.serialization.truncate(segment_start - 1); // Truncate "/.."
                     self.pop_path(scheme_type, path_start);
-                    if !self.serialization[path_start..].ends_with('/') {
-                        self.serialization.push('/')
+                    if ends_with_slash && !self.serialization.ends_with("/") {
+                        self.serialization.push('/');
                     }
                 }
+                // Otherwise, if buffer is a single-dot path segment and if neither c is U+002F (/),
+                // nor url is special and c is U+005C (\), append the empty string to url’s path.
                 "." | "%2e" | "%2E" => {
                     self.serialization.truncate(segment_start);
+                    if ends_with_slash && !self.serialization.ends_with("/") {
+                        self.serialization.push('/');
+                    }
                 }
                 _ => {
                     if scheme_type.is_file()
@@ -1200,9 +1201,6 @@ impl<'a> Parser<'a> {
                             self.log_violation(SyntaxViolation::FileWithHostAndWindowsDrive);
                             *has_host = false; // FIXME account for this in callers
                         }
-                    }
-                    if ends_with_slash {
-                        self.serialization.push('/')
                     }
                 }
             }

@@ -99,9 +99,6 @@ pub fn host(url: &Url) -> &str {
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-host
 pub fn set_host(url: &mut Url, new_host: &str) -> Result<(), ()> {
-    if url.cannot_be_a_base() {
-        return Err(());
-    }
     let host;
     let opt_port;
     {
