@@ -1024,20 +1024,100 @@ impl<'a> Parser<'a> {
         has_host: &mut bool,
         mut input: Input<'i>,
     ) -> Input<'i> {
-        // Path start state
-        match input.split_first() {
-            (Some('/'), remaining) => input = remaining,
-            (Some('\\'), remaining) => {
-                if scheme_type.is_special() {
-                    self.log_violation(SyntaxViolation::Backslash);
-                    input = remaining
+        let path_start = self.serialization.len();
+        let (maybe_c, remaining) = input.split_first();
+        // If url is special, then:
+        if scheme_type.is_special() {
+            // If c is U+005C (\), validation error.
+            if maybe_c == Some('\\') {
+                self.log_violation(SyntaxViolation::Backslash);
+            }
+            // If c is neither U+002F (/) nor U+005C (\), then decrease pointer by one.
+            if maybe_c == Some('/') || maybe_c == Some('\\') {
+                input = remaining;
+            }
+            // Set state to path state.
+            return self.parse_path(scheme_type, has_host, path_start, input);
+        } else if maybe_c == Some('?') {
+            // Otherwise, if state override is not given and c is U+003F (?),
+            // set url’s query to the empty string and state to query state.
+            return self.parse_query_2(scheme_type, remaining);
+        } else if maybe_c == Some('#') {
+            // Otherwise, if state override is not given and c is U+0023 (#),
+            // set url’s fragment to the empty string and state to fragment state.
+            return self.parse_fragment_2(remaining);
+        }
+        // Otherwise, if c is not the EOF code point:
+        if !remaining.is_empty() {
+            if maybe_c == Some('/') {
+                return self.parse_path(scheme_type, has_host, path_start, input);
+            } else {
+                // If c is not U+002F (/), then decrease pointer by one.
+                return self.parse_path(scheme_type, has_host, path_start, remaining);
+            }
+        }
+        input
+    }
+
+    pub fn parse_query_2<'i>(
+        &mut self,
+        scheme_type: SchemeType,
+        mut input: Input<'i>,
+    ) -> Input<'i> {
+        let mut query = String::new(); // FIXME: use a streaming decoder instead
+
+        while let Some((c, _)) = input.next_utf8() {
+            match c {
+                // If state override is not given and c is U+0023 (#),
+                // then set url’s fragment to the empty string and state to fragment state.
+                '#' => return self.parse_fragment_2(input),
+                c => {
+                    // If c is not a URL code point and not U+0025 (%), validation error.
+                    // If c is U+0025 (%) and remaining does not start with two ASCII hex digits, validation error.
+                    self.check_url_code_point(c, &input);
+                    query.push(c);
                 }
             }
-            _ => {}
         }
-        let path_start = self.serialization.len();
-        self.serialization.push('/');
-        self.parse_path(scheme_type, has_host, path_start, input)
+
+        // If encoding is not UTF-8 and one of the following is true
+        // url is not special
+        // url’s scheme is "ws" or "wss"
+        let encoding = if !scheme_type.is_special()
+            || self.serialization.starts_with("ws")
+            || self.serialization.starts_with("wss")
+        {
+            self.query_encoding_override
+        } else {
+            None
+        };
+        let query_bytes = ::query_encoding::encode(encoding, &query);
+        let set = if scheme_type.is_special() {
+            SPECIAL_QUERY
+        } else {
+            QUERY
+        };
+        self.serialization.extend(percent_encode(&query_bytes, set));
+        input
+    }
+
+    pub fn parse_fragment_2<'i>(&mut self, mut input: Input<'i>) -> Input<'i> {
+        while let Some((c, _)) = input.next_utf8() {
+            match c {
+                // U+0000 NULL: Validation error.
+                '\0' => self.log_violation(SyntaxViolation::NullInFragment),
+                c => {
+                    // If c is not a URL code point and not U+0025 (%), validation error.
+                    // If c is U+0025 (%) and remaining does not start with two ASCII hex digits, validation error.
+                    self.check_url_code_point(c, &input);
+                    // UTF-8 percent encode c using the fragment percent-encode set
+                    // and append the result to url’s fragment.
+                    self.serialization
+                        .extend(utf8_percent_encode(&c.to_string(), FRAGMENT));
+                }
+            }
+        }
+        input
     }
 
     pub fn parse_path<'i>(
@@ -1047,8 +1127,10 @@ impl<'a> Parser<'a> {
         path_start: usize,
         mut input: Input<'i>,
     ) -> Input<'i> {
+        if !self.serialization.ends_with('/') && scheme_type.is_special() && !input.is_empty() {
+            self.serialization.push('/');
+        }
         // Relative path state
-        debug_assert!(self.serialization.ends_with('/'));
         loop {
             let segment_start = self.serialization.len();
             let mut ends_with_slash = false;
@@ -1061,6 +1143,7 @@ impl<'a> Parser<'a> {
                 };
                 match c {
                     '/' if self.context != Context::PathSegmentSetter => {
+                        self.serialization.push(c);
                         ends_with_slash = true;
                         break;
                     }
@@ -1068,6 +1151,7 @@ impl<'a> Parser<'a> {
                         && scheme_type.is_special() =>
                     {
                         self.log_violation(SyntaxViolation::Backslash);
+                        self.serialization.push(c);
                         ends_with_slash = true;
                         break;
                     }

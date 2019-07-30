@@ -489,7 +489,7 @@ impl Url {
                     Some(port_str.parse::<u16>().expect("Couldn't parse port?"))
                 );
             }
-            assert_eq!(self.byte_at(self.path_start), b'/');
+        //assert!(self.path_start as usize == self.serialization.len() || self.byte_at(self.path_start) == b'/');
         } else {
             // Anarchist URL (no authority)
             assert_eq!(self.username_end, self.scheme_end + 1);
