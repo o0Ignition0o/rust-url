@@ -500,11 +500,11 @@ impl Url {
             assert_eq!(self.path_start, self.scheme_end + 1);
         }
         if let Some(start) = self.query_start {
-            assert!(start > self.path_start);
+            assert!(start >= self.path_start);
             assert_eq!(self.byte_at(start), b'?');
         }
         if let Some(start) = self.fragment_start {
-            assert!(start > self.path_start);
+            assert!(start >= self.path_start);
             assert_eq!(self.byte_at(start), b'#');
         }
         if let (Some(query_start), Some(fragment_start)) = (self.query_start, self.fragment_start) {

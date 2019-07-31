@@ -1022,7 +1022,7 @@ impl<'a> Parser<'a> {
         &mut self,
         scheme_type: SchemeType,
         has_host: &mut bool,
-        mut input: Input<'i>,
+        input: Input<'i>,
     ) -> Input<'i> {
         let path_start = self.serialization.len();
         let (maybe_c, remaining) = input.split_first();
@@ -1049,10 +1049,7 @@ impl<'a> Parser<'a> {
             return self.parse_fragment_2(remaining);
         }
         // Otherwise, if c is not the EOF code point:
-        if !remaining.is_empty() {
-            return self.parse_path(scheme_type, has_host, path_start, input);
-        }
-        input
+        self.parse_path(scheme_type, has_host, path_start, input)
     }
 
     pub fn parse_query_2<'i>(
