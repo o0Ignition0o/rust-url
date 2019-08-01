@@ -1139,8 +1139,15 @@ impl<'a> Parser<'a> {
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
                 | ".%2E" => {
                     debug_assert!(self.serialization.as_bytes()[segment_start - 1] == b'/');
-                    self.serialization.truncate(segment_start - 1); // Truncate "/.."
+                    // We dont want to truncate beyond the path start:
+                    if segment_start - 1 > path_start {
+                        self.serialization.truncate(segment_start - 1); // Truncate "/.."
+                    } else {
+                        self.serialization.truncate(segment_start); // Truncate ".."
+                    }
+
                     self.pop_path(scheme_type, path_start);
+
                     // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                     if ends_with_slash && !self.serialization.ends_with("/") {
                         self.serialization.push('/');
