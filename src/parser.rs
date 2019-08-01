@@ -422,7 +422,11 @@ impl<'a> Parser<'a> {
                         .collect::<String>()
                         != "//"
                 });
-                self.after_double_slash(remaining, scheme_type, scheme_end)
+                if let Some(after_prefix) = input.split_prefix("//") {
+                    return self.after_double_slash(after_prefix, scheme_type, scheme_end);
+                } else {
+                    self.after_double_slash(remaining, scheme_type, scheme_end)
+                }
             }
             SchemeType::NotSpecial => self.parse_non_special(input, scheme_type, scheme_end),
         }
@@ -735,6 +739,9 @@ impl<'a> Parser<'a> {
                     debug_assert!(base_url.byte_at(scheme_end) == b':');
                     self.serialization
                         .push_str(base_url.slice(..scheme_end + 1));
+                    if let Some(after_prefix) = input.split_prefix("//") {
+                        return self.after_double_slash(after_prefix, scheme_type, scheme_end);
+                    }
                     return self.after_double_slash(remaining, scheme_type, scheme_end);
                 }
                 let path_start = base_url.path_start;
@@ -1132,7 +1139,11 @@ impl<'a> Parser<'a> {
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
                 | ".%2E" => {
                     debug_assert!(self.serialization.as_bytes()[segment_start - 1] == b'/');
-                    self.serialization.truncate(segment_start - 1); // Truncate "/../"
+                    if ends_with_slash {
+                        self.serialization.truncate(segment_start - 1); // Truncate "/../"
+                    } else {
+                        self.serialization.truncate(segment_start); // Truncate ".."
+                    }
                     self.pop_path(scheme_type, path_start);
                     // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                     if ends_with_slash && !self.serialization.ends_with("/") {

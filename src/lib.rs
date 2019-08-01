@@ -455,13 +455,15 @@ impl Url {
 
         if self.slice(self.scheme_end + 1..).starts_with("//") {
             // URL with authority
-            match self.byte_at(self.username_end) {
-                b':' => {
-                    assert!(self.host_start >= self.username_end + 2);
-                    assert_eq!(self.byte_at(self.host_start - 1), b'@');
+            if self.username_end < self.serialization.len() as u32 {
+                match self.byte_at(self.username_end) {
+                    b':' => {
+                        assert!(self.host_start >= self.username_end + 2);
+                        assert_eq!(self.byte_at(self.host_start - 1), b'@');
+                    }
+                    b'@' => assert!(self.host_start == self.username_end + 1),
+                    _ => assert_eq!(self.username_end, self.scheme_end + 3),
                 }
-                b'@' => assert!(self.host_start == self.username_end + 1),
-                _ => assert_eq!(self.username_end, self.scheme_end + 3),
             }
             assert!(self.host_start >= self.username_end);
             assert!(self.host_end >= self.host_start);
