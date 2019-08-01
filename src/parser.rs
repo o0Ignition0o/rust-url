@@ -620,7 +620,7 @@ impl<'a> Parser<'a> {
                             (Some(i), _) | (None, Some(i)) => base_url.slice(..i),
                         };
                         self.serialization.push_str(before_query);
-                        self.pop_path(SchemeType::File, base_url.path_start as usize);
+                        self.shorten_path(SchemeType::File, base_url.path_start as usize);
                         let remaining = self.parse_path(
                             SchemeType::File,
                             &mut true,
@@ -1139,14 +1139,14 @@ impl<'a> Parser<'a> {
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
                 | ".%2E" => {
                     debug_assert!(self.serialization.as_bytes()[segment_start - 1] == b'/');
-                    // We dont want to truncate beyond the path start:
-                    if segment_start - 1 > path_start {
-                        self.serialization.truncate(segment_start - 1); // Truncate "/.."
+                    self.serialization.truncate(segment_start);
+                    // Do not remove the root slash
+                    if self.serialization.ends_with("/") && path_start + 1 < segment_start {
+                        self.serialization.pop();
+                        self.shorten_path(scheme_type, path_start);
                     } else {
-                        self.serialization.truncate(segment_start); // Truncate ".."
+                        self.shorten_path(scheme_type, path_start);
                     }
-
-                    self.pop_path(scheme_type, path_start);
 
                     // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                     if ends_with_slash && !self.serialization.ends_with("/") {
@@ -1191,6 +1191,27 @@ impl<'a> Parser<'a> {
         input
     }
 
+    /// https://url.spec.whatwg.org/#shorten-a-urls-path
+    fn shorten_path(&mut self, scheme_type: SchemeType, path_start: usize) {
+        // If path is empty, then return.
+        if self.serialization.len() <= path_start {
+            return;
+        }
+        // If url’s scheme is "file", path’s size is 1, and path[0] is a normalized Windows drive letter, then return.
+        let segments: Vec<&str> = self.serialization[path_start..]
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+        if scheme_type.is_file()
+            && segments.len() == 1
+            && is_normalized_windows_drive_letter(segments[0])
+        {
+            return;
+        }
+        // Remove path’s last item.
+        self.pop_path(scheme_type, path_start);
+    }
+
     /// https://url.spec.whatwg.org/#pop-a-urls-path
     fn pop_path(&mut self, scheme_type: SchemeType, path_start: usize) {
         if self.serialization.len() > path_start {
@@ -1198,9 +1219,8 @@ impl<'a> Parser<'a> {
             // + 1 since rfind returns the position before the slash.
             let segment_start = path_start + slash_position + 1;
             // Don’t pop a Windows drive letter
-            // FIXME: *normalized* Windows drive letter
             if !(scheme_type.is_file()
-                && is_windows_drive_letter(&self.serialization[segment_start..]))
+                && is_normalized_windows_drive_letter(&self.serialization[segment_start..]))
             {
                 self.serialization.truncate(segment_start);
             }
