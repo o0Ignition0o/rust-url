@@ -497,6 +497,8 @@ impl<'a> Parser<'a> {
                     self.serialization.push('/');
                     self.parse_path(SchemeType::File, &mut has_host, path_start, remaining)
                 };
+                // TODO: Handle authority
+                trim_path(&mut self.serialization, host_end as usize);
                 // For file URLs that have a host and whose path starts
                 // with the windows drive letter we just remove the host.
                 if !has_host {
@@ -538,16 +540,28 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                self.serialization.push('/');
-                let remaining = self.parse_path(
-                    SchemeType::File,
-                    &mut false,
-                    host_end,
-                    input_after_first_char,
-                );
+                // If c is the EOF code point, U+002F (/), U+005C (\), U+003F (?), or U+0023 (#), then decrease pointer by one
+                let parse_path_input = if let Some(c) = first_char {
+                    if c == '/' || c == '\\' || c == '?' || c == '#' {
+                        input
+                    } else {
+                        input_after_first_char
+                    }
+                } else {
+                    input_after_first_char
+                };
+
+                let remaining =
+                    self.parse_path(SchemeType::File, &mut false, host_end, parse_path_input);
+
+                let host_start = host_start as u32;
+
+                // TODO: Handle authority
+                trim_path(&mut self.serialization, host_end);
+
                 let (query_start, fragment_start) =
                     self.parse_query_and_fragment(scheme_type, scheme_end, remaining)?;
-                let host_start = host_start as u32;
+
                 let host_end = host_end as u32;
                 return Ok(Url {
                     serialization: self.serialization,
@@ -1025,21 +1039,24 @@ impl<'a> Parser<'a> {
         input: Input<'i>,
     ) -> Input<'i> {
         let path_start = self.serialization.len();
-        let (maybe_c, _) = input.split_first();
+        let (maybe_c, remaining) = input.split_first();
         // If url is special, then:
         if scheme_type.is_special() {
-            // A special URL always has a non-empty path.
-            if maybe_c != Some('/') {
-                self.serialization.push('/');
-            }
             if let Some(c) = maybe_c {
                 if c == '\\' {
                     // If c is U+005C (\), validation error.
                     self.log_violation(SyntaxViolation::Backslash);
                 }
-                // Set state to path state.
-                return self.parse_path(scheme_type, has_host, path_start, input);
             }
+            // A special URL always has a non-empty path.
+            if !self.serialization.ends_with("/") {
+                self.serialization.push('/');
+                // We have already made sure the forward slash is present.
+                if maybe_c == Some('/') || maybe_c == Some('\\') {
+                    return self.parse_path(scheme_type, has_host, path_start, remaining);
+                }
+            }
+            return self.parse_path(scheme_type, has_host, path_start, input);
         } else if maybe_c == Some('?') || maybe_c == Some('#') {
             // Otherwise, if state override is not given and c is U+003F (?),
             // set url’s query to the empty string and state to query state.
@@ -1050,67 +1067,6 @@ impl<'a> Parser<'a> {
         }
         // Otherwise, if c is not the EOF code point:
         self.parse_path(scheme_type, has_host, path_start, input)
-    }
-
-    pub fn parse_query_2<'i>(
-        &mut self,
-        scheme_type: SchemeType,
-        mut input: Input<'i>,
-    ) -> Input<'i> {
-        let mut query = String::new(); // FIXME: use a streaming decoder instead
-
-        while let Some((c, _)) = input.next_utf8() {
-            match c {
-                // If state override is not given and c is U+0023 (#),
-                // then set url’s fragment to the empty string and state to fragment state.
-                '#' => return self.parse_fragment_2(input),
-                c => {
-                    // If c is not a URL code point and not U+0025 (%), validation error.
-                    // If c is U+0025 (%) and remaining does not start with two ASCII hex digits, validation error.
-                    self.check_url_code_point(c, &input);
-                    query.push(c);
-                }
-            }
-        }
-
-        // If encoding is not UTF-8 and one of the following is true
-        // url is not special
-        // url’s scheme is "ws" or "wss"
-        let encoding = if !scheme_type.is_special()
-            || self.serialization.starts_with("ws")
-            || self.serialization.starts_with("wss")
-        {
-            self.query_encoding_override
-        } else {
-            None
-        };
-        let query_bytes = ::query_encoding::encode(encoding, &query);
-        let set = if scheme_type.is_special() {
-            SPECIAL_QUERY
-        } else {
-            QUERY
-        };
-        self.serialization.extend(percent_encode(&query_bytes, set));
-        input
-    }
-
-    pub fn parse_fragment_2<'i>(&mut self, mut input: Input<'i>) -> Input<'i> {
-        while let Some((c, _)) = input.next_utf8() {
-            match c {
-                // U+0000 NULL: Validation error.
-                '\0' => self.log_violation(SyntaxViolation::NullInFragment),
-                c => {
-                    // If c is not a URL code point and not U+0025 (%), validation error.
-                    // If c is U+0025 (%) and remaining does not start with two ASCII hex digits, validation error.
-                    self.check_url_code_point(c, &input);
-                    // UTF-8 percent encode c using the fragment percent-encode set
-                    // and append the result to url’s fragment.
-                    self.serialization
-                        .extend(utf8_percent_encode(&c.to_string(), FRAGMENT));
-                }
-            }
-        }
-        input
     }
 
     pub fn parse_path<'i>(
@@ -1173,12 +1129,12 @@ impl<'a> Parser<'a> {
             };
             match to_match {
                 // If buffer is a double-dot path segment, shorten url’s path,
-                // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
                 | ".%2E" => {
                     debug_assert!(self.serialization.as_bytes()[segment_start - 1] == b'/');
-                    self.serialization.truncate(segment_start - 1); // Truncate "/.."
+                    self.serialization.truncate(segment_start - 1); // Truncate "/../"
                     self.pop_path(scheme_type, path_start);
+                    // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                     if ends_with_slash && !self.serialization.ends_with("/") {
                         self.serialization.push('/');
                     }
@@ -1193,6 +1149,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     if scheme_type.is_file()
+                        //&& path_start + 1 < self.serialization.len()
                         && is_windows_drive_letter(&self.serialization[path_start + 1..])
                     {
                         if self.serialization.ends_with('|') {
@@ -1381,6 +1338,17 @@ impl<'a> Parser<'a> {
                 vfn(SyntaxViolation::NonUrlCodePoint)
             }
         }
+    }
+}
+
+// Trim path start forward slashes when no authority is present
+// https://github.com/whatwg/url/issues/232
+fn trim_path(serialization: &mut String, path_start: usize) {
+    let path = serialization.split_off(path_start);
+    if path.starts_with("/") {
+        let mut trimmed_path = "/".to_string();
+        trimmed_path.push_str(path.trim_start_matches("/"));
+        serialization.push_str(&trimmed_path);
     }
 }
 
