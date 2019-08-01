@@ -1122,12 +1122,12 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            let to_match = if ends_with_slash {
+            let segment_before_slash = if ends_with_slash {
                 &self.serialization[segment_start..self.serialization.len() - 1]
             } else {
                 &self.serialization[segment_start..self.serialization.len()]
             };
-            match to_match {
+            match segment_before_slash {
                 // If buffer is a double-dot path segment, shorten url’s path,
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
                 | ".%2E" => {
@@ -1148,14 +1148,21 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
-                    if scheme_type.is_file()
-                        //&& path_start + 1 < self.serialization.len()
-                        && is_windows_drive_letter(&self.serialization[path_start + 1..])
-                    {
-                        if self.serialization.ends_with('|') {
-                            self.serialization.pop();
-                            self.serialization.push(':');
+                    // If url’s scheme is "file", url’s path is empty, and buffer is a Windows drive letter, then
+                    if scheme_type.is_file() && is_windows_drive_letter(segment_before_slash) {
+                        //  Replace the second code point in buffer with U+003A (:).
+                        if let Some(c) = segment_before_slash.chars().nth(0) {
+                            let mut drive_letter = "".to_string();
+                            drive_letter.push(c);
+                            drive_letter.push(':');
+                            self.serialization.truncate(segment_start);
+                            self.serialization.push_str(&drive_letter);
+                            if ends_with_slash {
+                                self.serialization.push('/');
+                            }
                         }
+                        // If url’s host is neither the empty string nor null,
+                        // validation error, set url’s host to the empty string.
                         if *has_host {
                             self.log_violation(SyntaxViolation::FileWithHostAndWindowsDrive);
                             *has_host = false; // FIXME account for this in callers
