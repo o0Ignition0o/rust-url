@@ -1025,9 +1025,13 @@ impl<'a> Parser<'a> {
         input: Input<'i>,
     ) -> Input<'i> {
         let path_start = self.serialization.len();
-        let (maybe_c, remaining) = input.split_first();
+        let (maybe_c, _) = input.split_first();
         // If url is special, then:
         if scheme_type.is_special() {
+            // A special URL always has a non-empty path.
+            if maybe_c != Some('/') {
+                self.serialization.push('/');
+            }
             if let Some(c) = maybe_c {
                 if c == '\\' {
                     // If c is U+005C (\), validation error.
@@ -1035,18 +1039,14 @@ impl<'a> Parser<'a> {
                 }
                 // Set state to path state.
                 return self.parse_path(scheme_type, has_host, path_start, input);
-            } else {
-                // A special URL always has a non-empty path.
-                self.serialization.push('/');
             }
-        } else if maybe_c == Some('?') {
+        } else if maybe_c == Some('?') || maybe_c == Some('#') {
             // Otherwise, if state override is not given and c is U+003F (?),
             // set url’s query to the empty string and state to query state.
-            return self.parse_query_2(scheme_type, remaining);
-        } else if maybe_c == Some('#') {
             // Otherwise, if state override is not given and c is U+0023 (#),
             // set url’s fragment to the empty string and state to fragment state.
-            return self.parse_fragment_2(remaining);
+            // The query and path states will be handled by the caller.
+            return input;
         }
         // Otherwise, if c is not the EOF code point:
         self.parse_path(scheme_type, has_host, path_start, input)
@@ -1166,7 +1166,12 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            match &self.serialization[segment_start..] {
+            let to_match = if ends_with_slash {
+                &self.serialization[segment_start..self.serialization.len() - 1]
+            } else {
+                &self.serialization[segment_start..self.serialization.len()]
+            };
+            match to_match {
                 // If buffer is a double-dot path segment, shorten url’s path,
                 // and then if neither c is U+002F (/), nor url is special and c is U+005C (\), append the empty string to url’s path.
                 ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"

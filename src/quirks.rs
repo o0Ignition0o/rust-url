@@ -184,7 +184,10 @@ pub fn pathname(url: &Url) -> &str {
 /// Setter for https://url.spec.whatwg.org/#dom-url-pathname
 pub fn set_pathname(url: &mut Url, new_pathname: &str) {
     if !url.cannot_be_a_base() && !new_pathname.is_empty() {
-        if !SchemeType::from(url.scheme()).is_special() || Some('/') == new_pathname.chars().nth(0)
+        if !SchemeType::from(url.scheme()).is_special()
+            || Some('/') == new_pathname.chars().nth(0)
+            // \\ is a segment delimiter for 'special' URLs"
+            || Some('\\') == new_pathname.chars().nth(0)
         {
             url.set_path(new_pathname)
         } else {
