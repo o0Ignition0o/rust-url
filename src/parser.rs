@@ -614,12 +614,15 @@ impl<'a> Parser<'a> {
                 }
                 Some('#') => self.fragment_only(base_url, input),
                 _ => {
+                    // If the substring from pointer in input does not start with a Windows drive letter
                     if !starts_with_windows_drive_letter_segment(&input) {
                         let before_query = match (base_url.query_start, base_url.fragment_start) {
                             (None, None) => &*base_url.serialization,
                             (Some(i), _) | (None, Some(i)) => base_url.slice(..i),
                         };
+                        // then set url’s host to base’s host, url’s path to a copy of base’s path
                         self.serialization.push_str(before_query);
+                        // and then shorten url’s path.
                         self.shorten_path(SchemeType::File, base_url.path_start as usize);
                         let remaining = self.parse_path(
                             SchemeType::File,
@@ -1049,16 +1052,14 @@ impl<'a> Parser<'a> {
         // If url is special, then:
         if scheme_type.is_special() {
             if let Some(c) = maybe_c {
+                // If c is U+005C (\), validation error.
                 if c == '\\' {
-                    // If c is U+005C (\), validation error.
                     self.log_violation(SyntaxViolation::Backslash);
                 }
-            }
-            // A special URL always has a non-empty path.
-            if !self.serialization.ends_with("/") {
-                self.serialization.push('/');
-                // We have already made sure the forward slash is present.
-                if maybe_c == Some('/') || maybe_c == Some('\\') {
+                // If c is neither U+002F (/) nor U+005C (\), then decrease pointer by one.
+                if c != '\\' && c != '/' {
+                    return self.parse_path(scheme_type, has_host, path_start, input);
+                } else {
                     return self.parse_path(scheme_type, has_host, path_start, remaining);
                 }
             }
@@ -1072,7 +1073,16 @@ impl<'a> Parser<'a> {
             return input;
         }
         // Otherwise, if c is not the EOF code point:
-        self.parse_path(scheme_type, has_host, path_start, input)
+        if let Some(c) = maybe_c {
+            // If c is not U+002F (/), then decrease pointer by one.
+            if c != '/' {
+                self.parse_path(scheme_type, has_host, path_start, input)
+            } else {
+                self.parse_path(scheme_type, has_host, path_start, remaining)
+            }
+        } else {
+            input
+        }
     }
 
     pub fn parse_path<'i>(
@@ -1082,9 +1092,10 @@ impl<'a> Parser<'a> {
         path_start: usize,
         mut input: Input<'i>,
     ) -> Input<'i> {
+        let mut path_segments: Vec<String> = Vec::new();
         // Relative path state
         loop {
-            let segment_start = self.serialization.len();
+            let mut buffer = String::new();
             let mut ends_with_slash = false;
             loop {
                 let input_before_c = input.clone();
@@ -1113,81 +1124,102 @@ impl<'a> Parser<'a> {
                         self.check_url_code_point(c, &input);
                         if self.context == Context::PathSegmentSetter {
                             if scheme_type.is_special() {
-                                self.serialization
-                                    .extend(utf8_percent_encode(utf8_c, SPECIAL_PATH_SEGMENT));
+                                buffer.extend(utf8_percent_encode(utf8_c, SPECIAL_PATH_SEGMENT));
                             } else {
-                                self.serialization
-                                    .extend(utf8_percent_encode(utf8_c, PATH_SEGMENT));
+                                buffer.extend(utf8_percent_encode(utf8_c, PATH_SEGMENT));
                             }
                         } else {
-                            self.serialization.extend(utf8_percent_encode(utf8_c, PATH));
+                            buffer.extend(utf8_percent_encode(utf8_c, PATH));
                         }
                     }
                 }
             }
 
-            let current_segment = &self.serialization[segment_start..self.serialization.len()];
-            match current_segment {
+            match buffer.as_bytes() {
                 // If buffer is a double-dot path segment, shorten url’s path,
-                ".." | "%2e%2e" | "%2e%2E" | "%2E%2e" | "%2E%2E" | "%2e." | "%2E." | ".%2e"
-                | ".%2E" => {
-                    debug_assert!(self.serialization.as_bytes()[segment_start - 1] == b'/');
-                    // We don't want to remove the root slash
-                    if segment_start - 1 == path_start {
-                        self.serialization.truncate(segment_start);
-                        self.shorten_path(scheme_type, path_start);
-                    } else {
-                        self.serialization.truncate(segment_start - 1);
-                        self.shorten_path(scheme_type, path_start);
+                b".." | b"%2e%2e" | b"%2e%2E" | b"%2E%2e" | b"%2E%2E" | b"%2e." | b"%2E."
+                | b".%2e" | b".%2E" => {
+                    if path_segments.len() > 0 {
+                        path_segments.pop();
+                    }
+                    // and then if neither c is U+002F (/), nor url is special and c is U+005C (\),
+                    // append the empty string to url’s path.
+                    if !ends_with_slash {
+                        path_segments.push("".to_string());
                     }
                 }
                 // Otherwise, if buffer is a single-dot path segment and if neither c is U+002F (/),
                 // nor url is special and c is U+005C (\), append the empty string to url’s path.
-                "." | "%2e" | "%2E" => {
-                    self.serialization.truncate(segment_start);
+                b"." | b"%2e" | b"%2E" if !ends_with_slash => {
+                    path_segments.push("".to_string());
                 }
-                _ => {
+                // Otherwise, if buffer is not a single-dot path segment, then:
+                b if b != b"." && b != b"%2e" && b != b"%2E" => {
                     // If url’s scheme is "file", url’s path is empty, and buffer is a Windows drive letter, then
-                    if scheme_type.is_file() && is_windows_drive_letter(current_segment) {
-                        //  Replace the second code point in buffer with U+003A (:).
-                        if let Some(c) = current_segment.chars().nth(0) {
-                            let mut drive_letter = "".to_string();
-                            drive_letter.push(c);
-                            drive_letter.push(':');
-                            self.serialization.truncate(segment_start);
-                            self.serialization.push_str(&drive_letter);
-                        }
-
+                    if scheme_type.is_file()
+                        && path_segments.len() == 0
+                        && is_windows_drive_letter(&buffer)
+                    {
                         // If url’s host is neither the empty string nor null,
                         // validation error, set url’s host to the empty string.
                         if *has_host {
                             self.log_violation(SyntaxViolation::FileWithHostAndWindowsDrive);
                             *has_host = false; // FIXME account for this in callers
                         }
+
+                        //  Replace the second code point in buffer with U+003A (:).
+                        if let Some(c) = buffer.chars().nth(0) {
+                            let mut drive_letter = String::new();
+                            drive_letter.push(c);
+                            drive_letter.push(':');
+                            buffer = drive_letter;
+                        }
                     }
+                    // Append buffer to url’s path.
+                    path_segments.push(buffer);
                 }
+                _ => {}
             }
-            if ends_with_slash {
-                // If path doesn't only contains the root slash
-                if !self.serialization.ends_with("/") || self.serialization.len() != path_start + 1
-                {
-                    // and then if neither c is U+002F (/), nor url is special and c is U+005C (\),
-                    // append the empty string to url’s path.
-                    self.serialization.push('/');
-                }
-            } else {
+
+            if !ends_with_slash {
                 break;
             }
         }
+
+        if scheme_type.is_special() {
+            let non_empty_path_segments = path_segments.iter().skip_while(|s| s.is_empty());
+
+            // Otherwise, then for each string in url’s path,
+            // append U+002F (/) followed by the string to output.
+            for segment in non_empty_path_segments {
+                self.serialization.push('/');
+                self.serialization.push_str(&segment);
+            }
+        } else {
+            // Otherwise, then for each string in url’s path,
+            // append U+002F (/) followed by the string to output.
+            for segment in path_segments {
+                self.serialization.push('/');
+                self.serialization.push_str(&segment);
+            }
+        }
+
+        // A special URL always has a non-empty path.
+        if self.serialization.len() <= path_start
+            && self.serialization.as_bytes()[path_start - 1] != b'/'
+        {
+            self.serialization.push('/');
+        }
+
         input
     }
 
     fn remove_last_path_item(&mut self, scheme_type: SchemeType, path_start: usize) {
-        self.pop_path(scheme_type, path_start);
-        // Do not remove the root
-        if self.serialization.ends_with("/") && self.serialization.len() > path_start + 1 {
+        if self.serialization.ends_with("/") && self.serialization.len() > path_start {
             self.serialization.pop();
         }
+        self.pop_path(scheme_type, path_start);
+        self.serialization.pop();
     }
 
     /// https://url.spec.whatwg.org/#shorten-a-urls-path
@@ -1211,7 +1243,13 @@ impl<'a> Parser<'a> {
             return;
         }
         // Remove path’s last item.
-        self.pop_path(scheme_type, path_start)
+        if self.serialization.ends_with("/") {
+            self.serialization.pop();
+            self.pop_path(scheme_type, path_start);
+        } else {
+            self.pop_path(scheme_type, path_start);
+            self.serialization.pop();
+        }
     }
 
     /// https://url.spec.whatwg.org/#pop-a-urls-path

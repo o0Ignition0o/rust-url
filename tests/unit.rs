@@ -549,3 +549,682 @@ fn test_options_reuse() {
     assert_eq!(url.as_str(), "http://mozilla.org/sub/path");
     assert_eq!(*violations.borrow(), vec!(ExpectedDoubleSlash, Backslash));
 }
+
+#[test]
+fn test_cust2() {
+    use url::quirks::*;
+    /*
+    {
+      "input": "http://example.com/foo/../../../ton",
+      "base": "about:blank",
+      "href": "http://example.com/ton",
+      "origin": "http://example.com",
+      "protocol": "http:",
+      "username": "",
+      "password": "",
+      "host": "example.com",
+      "hostname": "example.com",
+      "port": "",
+      "pathname": "/ton",
+      "search": "",
+      "hash": ""
+    },
+        */
+
+    let url = Url::parse("http://example.com/foo/../../../ton").unwrap();
+
+    assert_eq!("http://example.com/ton", href(&url));
+}
+
+#[test]
+fn test_cust3() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+
+    {
+      "input": "#x",
+      "base": "sc://ñ",
+      "href": "sc://%C3%B1#x",
+      "origin": "null",
+      "protocol": "sc:",
+      "username": "",
+      "password": "",
+      "host": "%C3%B1",
+      "hostname": "%C3%B1",
+      "port": "",
+      "pathname": "",
+      "search": "",
+      "hash": "#x"
+    },
+    */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("sc://ñ").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("#x").unwrap();
+
+    assert_eq!("sc://%C3%B1#x", href(&url));
+    assert_eq!("null", origin(&url));
+    assert_eq!("sc:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("%C3%B1", host(&url));
+    assert_eq!("%C3%B1", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("#x", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+
+    check_invariants(&url);
+}
+
+fn check_invariants(url: &Url) {
+    url.check_invariants().unwrap();
+    #[cfg(feature = "serde")]
+    {
+        let bytes = serde_json::to_vec(url).unwrap();
+        let new_url: Url = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(url, &new_url);
+    }
+}
+#[test]
+fn test_custom_2() {
+    use url::quirks::*;
+    /*
+
+
+    {
+      "input": "http://example.com////../..",
+      "base": "about:blank",
+      "href": "http://example.com//",
+      "origin": "http://example.com",
+      "protocol": "http:",
+      "username": "",
+      "password": "",
+      "host": "example.com",
+      "hostname": "example.com",
+      "port": "",
+      "pathname": "//",
+      "search": "",
+      "hash": ""
+    },
+        */
+
+    let url = Url::parse("http://example.com////../..").unwrap();
+
+    assert_eq!("http://example.com//", href(&url));
+}
+
+#[test]
+fn test_cust4() {
+    use url::quirks::*;
+    /*
+
+        {
+            "comment": "\\ is a segment delimiter for 'special' URLs",
+            "href": "http://example.net/home?lang=fr#nav",
+            "new_value": "\\a\\%2E\\b\\%2e.\\c",
+            "expected": {
+                "href": "http://example.net/a/c?lang=fr#nav",
+                "pathname": "/a/c"
+            }
+        },
+    */
+
+    let mut url = Url::parse("http://example.net/home?lang=fr#nav").unwrap();
+    set_pathname(&mut url, "\\a\\%2E\\b\\%2e.\\c");
+    assert_eq!("http://example.net/a/c?lang=fr#nav", href(&url));
+    assert_eq!("/a/c", pathname(&url));
+}
+
+#[test]
+fn test_cust5() {
+    use url::quirks::*;
+    /*
+    {
+        "href": "https://example.net?lang=en-US#nav",
+        "new_value": "?",
+        "expected": {
+            "href": "https://example.net/?#nav",
+            "search": ""
+        }
+    },
+    */
+
+    let mut url = Url::parse("https://example.net?lang=en-US#nav").unwrap();
+    set_search(&mut url, "?");
+    assert_eq!("https://example.net/?#nav", href(&url));
+    assert_eq!("", search(&url));
+}
+
+#[test]
+fn test_cust6() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+    {
+      "input": "/..//localhost//pig",
+      "base": "file://lion/",
+      "href": "file://lion/localhost//pig",
+      "protocol": "file:",
+      "username": "",
+      "password": "",
+      "host": "lion",
+      "hostname": "lion",
+      "port": "",
+      "pathname": "/localhost//pig",
+      "search": "",
+      "hash": ""
+    },
+      */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("file://lion/").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("/..//localhost//pig").unwrap();
+
+    assert_eq!("file://lion/localhost//pig", href(&url));
+    assert_eq!("file:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("lion", host(&url));
+    assert_eq!("lion", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/localhost//pig", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust7() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*   {
+      "input": "  File:c|////foo\\bar.html",
+      "base": "file:///tmp/mock/path",
+      "href": "file:///c:////foo/bar.html",
+      "protocol": "file:",
+      "username": "",
+      "password": "",
+      "host": "",
+      "hostname": "",
+      "port": "",
+      "pathname": "/c:////foo/bar.html",
+      "search": "",
+      "hash": ""
+    }, */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("file:///tmp/mock/path").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("  File:c|////foo\\bar.html").unwrap();
+    check_invariants(&url);
+
+    assert_eq!("file:///c:////foo/bar.html", href(&url));
+    assert_eq!("file:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/c:////foo/bar.html", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+}
+
+#[test]
+fn test_cust8() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*   {
+      "input": "..",
+      "base": "file:///",
+      "href": "file:///",
+      "protocol": "file:",
+      "username": "",
+      "password": "",
+      "host": "",
+      "hostname": "",
+      "port": "",
+      "pathname": "/",
+      "search": "",
+      "hash": ""
+    },*/
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("file:///").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("..").unwrap();
+    check_invariants(&url);
+
+    assert_eq!("file:///", href(&url));
+    assert_eq!("file:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+}
+#[test]
+fn test_cust9() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+    {
+      "input": "////",
+      "base": "sc://x/",
+      "href": "sc:////",
+      "protocol": "sc:",
+      "username": "",
+      "password": "",
+      "host": "",
+      "hostname": "",
+      "port": "",
+      "pathname": "//",
+      "search": "",
+      "hash": ""
+    },*/
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("sc://x/").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("////").unwrap();
+    check_invariants(&url);
+
+    assert_eq!("sc:////", href(&url));
+    assert_eq!("sc:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("//", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+}
+
+#[test]
+fn test_cust10() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+    {
+      "input": "..",
+      "base": "file:///1:/",
+      "href": "file:///",
+      "protocol": "file:",
+      "username": "",
+      "password": "",
+      "host": "",
+      "hostname": "",
+      "port": "",
+      "pathname": "/",
+      "search": "",
+      "hash": ""
+    },
+      */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("file:///1:/").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("..").unwrap();
+    check_invariants(&url);
+
+    assert_eq!("file:///", href(&url));
+    assert_eq!("file:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+}
+
+#[test]
+fn test_cust11() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+
+    /* {
+      "input": "..",
+      "base": "http://www.example.com/test",
+      "href": "http://www.example.com/",
+      "origin": "http://www.example.com",
+      "protocol": "http:",
+      "username": "",
+      "password": "",
+      "host": "www.example.com",
+      "hostname": "www.example.com",
+      "port": "",
+      "pathname": "/",
+      "search": "",
+      "hash": ""
+    }, */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("http://www.example.com/test").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("..").unwrap();
+
+    assert_eq!("http://www.example.com/", href(&url));
+    assert_eq!("http:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("www.example.com", host(&url));
+    assert_eq!("www.example.com", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust12() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+    {
+      "input": "..",
+      "base": "file:///C:/",
+      "href": "file:///C:/",
+      "protocol": "file:",
+      "username": "",
+      "password": "",
+      "host": "",
+      "hostname": "",
+      "port": "",
+      "pathname": "/C:/",
+      "search": "",
+      "hash": ""
+    },
+    */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("file:///C:/").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("..").unwrap();
+
+    assert_eq!("file:///C:/", href(&url));
+    assert_eq!("file:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/C:/", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust13() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+    {
+      "input": "../i",
+      "base": "sc://ho/pa",
+      "href": "sc://ho/i",
+      "origin": "null",
+      "protocol": "sc:",
+      "username": "",
+      "password": "",
+      "host": "ho",
+      "hostname": "ho",
+      "port": "",
+      "pathname": "/i",
+      "search": "",
+      "hash": ""
+    },
+      */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("sc://ho/pa").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("../i").unwrap();
+
+    assert_eq!("sc://ho/i", href(&url));
+    assert_eq!("null", origin(&url));
+    assert_eq!("sc:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("ho", host(&url));
+    assert_eq!("ho", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/i", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust14() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+    /*
+
+    {
+      "input": "\t   :foo.com   \n",
+      "base": "http://example.org/foo/bar",
+      "href": "http://example.org/foo/:foo.com",
+      "origin": "http://example.org",
+      "protocol": "http:",
+      "username": "",
+      "password": "",
+      "host": "example.org",
+      "hostname": "example.org",
+      "port": "",
+      "pathname": "/foo/:foo.com",
+      "search": "",
+      "hash": ""
+    },
+        */
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("http://example.org/foo/bar").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("\t   :foo.com   \n").unwrap();
+
+    assert_eq!("http://example.org/foo/:foo.com", href(&url));
+    assert_eq!("http://example.org", origin(&url));
+    assert_eq!("http:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("example.org", host(&url));
+    assert_eq!("example.org", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("/foo/:foo.com", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust15() {
+    use url::quirks::*;
+
+    use url::SyntaxViolation::*;
+    let violations = RefCell::new(Vec::new());
+
+    /*  {
+      "input": "foo://///////",
+      "base": "http://example.org/foo/bar",
+      "href": "foo://///////",
+      "origin": "null",
+      "protocol": "foo:",
+      "username": "",
+      "password": "",
+      "host": "",
+      "hostname": "",
+      "port": "",
+      "pathname": "///////",
+      "search": "",
+      "hash": ""
+    },
+    */
+
+    let vfn = |v| violations.borrow_mut().push(v);
+
+    let base_url = Url::parse("http://example.org/foo/bar").unwrap();
+    let options = Url::options().syntax_violation_callback(Some(&vfn));
+    let options = options.base_url(Some(&base_url));
+    let url = options.parse("foo://///////").unwrap();
+
+    assert_eq!("foo://///////", href(&url));
+    assert_eq!("null", origin(&url));
+    assert_eq!("foo:", protocol(&url));
+    assert_eq!("", username(&url));
+    assert_eq!("", password(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    assert_eq!("///////", pathname(&url));
+    assert_eq!("", search(&url));
+    assert_eq!("", hash(&url));
+
+    let url2 = Url::parse(url.as_str()).unwrap();
+    assert_eq!(url2.as_str(), url.as_str());
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust16() {
+    use url::quirks::*;
+    /*
+    {
+        "href": "file://y/",
+        "new_value": "loc%41lhost",
+        "expected": {
+            "href": "file:///",
+            "host": "",
+            "hostname": "",
+            "port": ""
+        }
+    },
+    */
+
+    let mut url = Url::parse("file://y/").unwrap();
+    set_host(&mut url, "loc%41lhost").unwrap();
+
+    assert_eq!("file:///", href(&url));
+    assert_eq!("", host(&url));
+    assert_eq!("", hostname(&url));
+    assert_eq!("", port(&url));
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust17() {
+    use url::quirks::*;
+
+    /*
+            {
+            "comment": "The empty string is not a valid scheme. Setter leaves the URL unchanged.",
+            "href": "a://example.net",
+            "new_value": "",
+            "expected": {
+                "href": "a://example.net",
+                "protocol": "a:"
+            }
+        },
+    */
+
+    let mut url = Url::parse("a://example.net").unwrap();
+    let _ = set_protocol(&mut url, "");
+
+    assert_eq!("a://example.net", href(&url));
+    assert_eq!("a:", protocol(&url));
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust18() {
+    use url::quirks::*;
+
+    /*
+            {
+            "comment": "The empty string is not a valid scheme. Setter leaves the URL unchanged.",
+            "href": "a://example.net",
+            "new_value": "",
+            "expected": {
+                "href": "a://example.net",
+                "protocol": "a:"
+            }
+        },
+    */
+
+    let url = Url::parse("http://example.org//a/b/c").unwrap();
+
+    assert_eq!("http://example.org/a/b/c", href(&url));
+    check_invariants(&url);
+}
