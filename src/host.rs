@@ -60,9 +60,10 @@ impl<'de> ::serde::Deserialize<'de> for HostInternal {
     }
 }
 
-impl<S> From<Host<S>> for HostInternal {
+impl<S> From<Host<S>> for HostInternal where S: ToString {
     fn from(host: Host<S>) -> HostInternal {
         match host {
+            Host::Domain(ref s) if s.to_string().is_empty() => HostInternal::None,
             Host::Domain(_) => HostInternal::Domain,
             Host::Ipv4(address) => HostInternal::Ipv4(address),
             Host::Ipv6(address) => HostInternal::Ipv6(address),

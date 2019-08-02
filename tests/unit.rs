@@ -776,7 +776,6 @@ fn test_cust7() {
     let options = Url::options().syntax_violation_callback(Some(&vfn));
     let options = options.base_url(Some(&base_url));
     let url = options.parse("  File:c|////foo\\bar.html").unwrap();
-    check_invariants(&url);
 
     assert_eq!("file:///c:////foo/bar.html", href(&url));
     assert_eq!("file:", protocol(&url));
@@ -788,9 +787,7 @@ fn test_cust7() {
     assert_eq!("/c:////foo/bar.html", pathname(&url));
     assert_eq!("", search(&url));
     assert_eq!("", hash(&url));
-
-    let url2 = Url::parse(url.as_str()).unwrap();
-    assert_eq!(url2.as_str(), url.as_str());
+    check_invariants(&url);
 }
 
 #[test]
@@ -951,7 +948,7 @@ fn test_cust11() {
     let base_url = Url::parse("http://www.example.com/test").unwrap();
     let options = Url::options().syntax_violation_callback(Some(&vfn));
     let options = options.base_url(Some(&base_url));
-    let url = options.parse("..").unwrap();
+    let url = options.parse("/").unwrap();
 
     assert_eq!("http://www.example.com/", href(&url));
     assert_eq!("http:", protocol(&url));
@@ -1226,5 +1223,34 @@ fn test_cust18() {
     let url = Url::parse("http://example.org//a/b/c").unwrap();
 
     assert_eq!("http://example.org/a/b/c", href(&url));
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust19() {
+    use url::quirks::*;
+
+    let mut url = Url::parse("file://hi/x").unwrap();
+    set_host(&mut url, "");
+    assert_eq!("file:///x", href(&url));
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust20() {
+    use url::quirks::*;
+
+    let url = Url::parse("http://f:0/c/").unwrap();
+    assert_eq!("http://f:0/c", href(&url));
+    check_invariants(&url);
+}
+
+#[test]
+fn test_cust21() {
+    use url::quirks::*;
+
+    let mut url = Url::parse("sc://test:12").unwrap();
+    let _ = set_host(&mut url, "");
+    assert_eq!("sc://test:12", href(&url));
     check_invariants(&url);
 }

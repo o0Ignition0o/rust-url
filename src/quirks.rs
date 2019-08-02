@@ -122,6 +122,17 @@ pub fn set_host(url: &mut Url, new_host: &str) -> Result<(), ()> {
             Err(_) => return Err(()),
         }
     }
+    // Make sure we won't set an empty host to a url with a port
+    if host == Host::Domain("".to_string()) {
+        if let Some(p) = opt_port {
+            if let Some(_) = p {
+                return Err(());
+            }
+        }
+        if url.port().is_some() {
+            return Err(());
+        }
+    }
     url.set_host_internal(host, opt_port);
     Ok(())
 }
