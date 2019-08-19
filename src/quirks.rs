@@ -234,7 +234,7 @@ pub fn set_pathname(url: &mut Url, new_pathname: &str) {
     if url.cannot_be_a_base() {
         return;
     }
-    if !SchemeType::from(url.scheme()).is_special()
+    if SchemeType::from(url.scheme()).is_special()
             || Some('/') == new_pathname.chars().nth(0)
             // \\ is a segment delimiter for 'special' URLs"
             || Some('\\') == new_pathname.chars().nth(0)
